@@ -1,0 +1,634 @@
+{
+  "name": "Software inventory → catalog (Claude)",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Інвентаризація ПЗ",
+        "formDescription": "Завантажте вивід <code>winget list</code> у .txt або вставте його текстом. Довідники ПЗ і пакетів оновляться автоматично.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Файл winget list (.txt)",
+              "fieldType": "file",
+              "fieldName": "inventory_file",
+              "multipleFiles": false,
+              "acceptFileTypes": ".txt"
+            },
+            {
+              "fieldLabel": "або вставте текст",
+              "fieldType": "textarea",
+              "fieldName": "inventory_text"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "form",
+      "name": "Form",
+      "webhookId": "b7a6f1c2-5d3e-4a8b-9c0d-1e2f3a4b5c6d",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse: winget list (fixed-width text) -> one item { run_id, now, rows[] }\nconst input = $input.first();\n\nfunction decode(buf) {\n  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) return buf.toString('utf16le').slice(1);\n  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return buf.toString('utf8').slice(1);\n  let zeros = 0;\n  for (let i = 1; i < Math.min(buf.length, 400); i += 2) if (buf[i] === 0) zeros++;\n  if (zeros > 50) return buf.toString('utf16le');\n  return buf.toString('utf8');\n}\n\nlet text = String(input.json.inventory_text || '');\nif (!text.trim() && input.binary) {\n  const key = Object.keys(input.binary)[0];\n  if (key) text = decode(await this.helpers.getBinaryDataBuffer(0, key));\n}\nif (!text.trim()) throw new Error('Порожні вхідні дані: завантажте файл або вставте текст winget list');\n\nconst lines = text.split(/\\r?\\n/).map(l => l.split('\\r').pop());\nconst dashIdx = lines.findIndex(l => /^-{20,}\\s*$/.test(l));\nif (dashIdx < 1) throw new Error('Не знайдено заголовок таблиці winget list (рядок з дефісами)');\n\nconst header = lines[dashIdx - 1];\nconst starts = [];\nfor (const m of header.matchAll(/\\S+/g)) starts.push(m.index);\nconst names = starts.length >= 5\n  ? ['name', 'id', 'version', 'available', 'source']\n  : ['name', 'id', 'version', 'source'];\n\nfunction djb2(s) {\n  let h = 5381;\n  for (const ch of s) h = ((h * 33) ^ ch.codePointAt(0)) >>> 0;\n  return h.toString(16).padStart(8, '0');\n}\nfunction normName(s) {\n  return s.toLowerCase().replace(/…$/, '').replace(/\\d+(\\.\\d+)+(-\\d+)?/g, ' ')\n    .replace(/\\s+/g, ' ').trim();\n}\nfunction archOf(id) {\n  const m = id.match(/^ARP\\\\(?:Machine|User)\\\\(X64|X86|ARM64)\\\\/i)\n    || id.match(/_(x64|x86|arm64|neutral)_/i)\n    || id.match(/\\.(x64|x86|arm64)$/i);\n  return m ? m[1].toLowerCase() : '';\n}\nfunction keyOf(id, name) {\n  const idTrunc = id.endsWith('…');\n  const clean = id.replace(/…$/, '');\n  if (/^msix\\\\/i.test(clean) && clean.includes('_')) return clean.split('_')[0].toLowerCase();\n  if (idTrunc) return clean.toLowerCase() + '#' + djb2(normName(name));\n  return clean.toLowerCase();\n}\n\nconst byKey = new Map();\nfor (const line of lines.slice(dashIdx + 1)) {\n  if (!line.trim()) continue;\n  const rec = {};\n  names.forEach((n, i) => {\n    rec[n] = line.slice(starts[i], i + 1 < starts.length ? starts[i + 1] : undefined).trim();\n  });\n  if (!rec.name || !rec.id) continue;\n  const key = keyOf(rec.id, rec.name);\n  const sourceType = /^ARP\\\\/i.test(rec.id) ? 'arp' : /^MSIX\\\\/i.test(rec.id) ? 'msix'\n    : (rec.source || '').toLowerCase() === 'winget' ? 'winget' : 'other';\n  const prev = byKey.get(key);\n  if (prev) {\n    prev.instances += 1;\n    if (!prev.versions.includes(rec.version)) prev.versions.push(rec.version);\n    if (!prev.available_version && rec.available) prev.available_version = rec.available;\n    const arch = archOf(rec.id);\n    if (arch && !prev.archs.includes(arch)) prev.archs.push(arch);\n    continue;\n  }\n  const arch = archOf(rec.id);\n  byKey.set(key, {\n    package_key: key,\n    package_id: rec.id,\n    name: rec.name,\n    versions: [rec.version],\n    available_version: rec.available || '',\n    source_type: sourceType,\n    archs: arch ? [arch] : [],\n    truncated: rec.name.endsWith('…') || rec.id.endsWith('…'),\n    instances: 1,\n  });\n}\n\nconst rows = [...byKey.values()].map(r => ({\n  package_key: r.package_key,\n  package_id: r.package_id,\n  name: r.name,\n  version: r.versions.join('; '),\n  available_version: r.available_version,\n  source_type: r.source_type,\n  arch: r.archs.join(','),\n  truncated: r.truncated,\n  instances: r.instances,\n})).sort((a, b) => a.package_key.localeCompare(b.package_key));\n\nconst now = new Date().toISOString();\nreturn [{ json: { run_id: 'run-' + now.replace(/[-:.TZ]/g, '').slice(0, 14), now, source_lines: lines.length, rows } }];\n"
+      },
+      "id": "parse",
+      "name": "Parse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "sw_categories"
+        },
+        "returnAll": true
+      },
+      "id": "load-cat",
+      "name": "Load categories",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "position": [
+        448,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "sw_software"
+        },
+        "returnAll": true
+      },
+      "id": "load-sw",
+      "name": "Load software",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "position": [
+        672,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "sw_packages"
+        },
+        "returnAll": true
+      },
+      "id": "load-pkg",
+      "name": "Load packages",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "position": [
+        880,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Match: dictionary -> alias rules -> AI queue. Emits one item per AI batch, or one {skip:true}.\nconst MODEL = 'claude-opus-5';\nconst BATCH_SIZE = 150;\n\nconst parsed = $('Parse').first().json;\nconst categories = $('Load categories').all().map(i => i.json).filter(r => r.code)\n  .sort((a, b) => a.code.localeCompare(b.code));\nconst software = $('Load software').all().map(i => i.json).filter(r => r.software_key);\nconst packages = $('Load packages').all().map(i => i.json).filter(r => r.package_key);\n\nconst softwareByKey = Object.fromEntries(software.map(s => [s.software_key, s]));\nconst packageByKey = Object.fromEntries(packages.map(p => [p.package_key, p]));\n\nconst aliasRules = [];\nfor (const s of software) {\n  for (const raw of String(s.aliases || '').split('|')) {\n    const a = raw.trim().toLowerCase();\n    const m = a.match(/^(id|name):(.+)$/);\n    if (m) aliasRules.push({ field: m[1], prefix: m[2], software_key: s.software_key });\n  }\n}\naliasRules.sort((a, b) => b.prefix.length - a.prefix.length || a.software_key.localeCompare(b.software_key));\n\nconst matched = [];\nconst unknown = [];\nfor (const row of parsed.rows) {\n  const prev = packageByKey[row.package_key];\n  if (prev && prev.software_key && softwareByKey[prev.software_key] && prev.match_method !== 'fallback') {\n    matched.push({ ...row, software_key: prev.software_key, match_method: prev.match_method || 'dictionary',\n      confidence: prev.confidence ?? 1, reason: prev.reason || '', needs_review: !!prev.needs_review });\n    continue;\n  }\n  const id = row.package_id.toLowerCase();\n  const name = row.name.toLowerCase();\n  const rule = aliasRules.find(r => (r.field === 'id' ? id : name).startsWith(r.prefix));\n  if (rule) {\n    matched.push({ ...row, software_key: rule.software_key, match_method: 'rule', confidence: 1,\n      reason: `alias ${rule.field}:${rule.prefix}`, needs_review: false });\n    continue;\n  }\n  unknown.push(row);\n}\n\nconst categoryCodes = categories.map(c => c.code);\nconst system = [\n  'You classify installed Windows software packages (from `winget list`) into a software catalog.',\n  'Definitions: SOFTWARE is a product a person knowingly installs or buys (e.g. \"Microsoft Office\", \"Python\", \"Mozilla Firefox\").',\n  'A PACKAGE is one installed component or variant of a product (e.g. \"Microsoft Word\" and \"Office Click-to-Run\" are packages of \"Microsoft Office\"; \"Python Launcher\" is a package of \"Python\"; \"Mozilla Maintenance Service\" is a package of \"Mozilla Firefox\"; the same game from Steam and from another store is one software).',\n  'Group all components/add-ins/services/drivers/updaters of one product under ONE software. Different major versions of the same product are the same software (Python 3.12 and 3.14 -> \"Python\").',\n  'An add-in for product A made for product B belongs to the product it extends the functionality of (e.g. \"Microsoft Teams Meeting Add-in for Microsoft Office\" -> \"Microsoft Teams\").',\n  'Built-in Windows apps that a user perceives as separate apps (Calculator, Paint, Notepad, Camera, Photos...) are separate software with vendor Microsoft. Use their canonical English product names (e.g. \"Windows Calculator\").',\n  'If a package belongs to software already in the catalog, return its existing_software_key. Otherwise return existing_software_key as an empty string and give a canonical English software_name without version numbers, edition or architecture.',\n  'category_code must be one of the listed codes; pick the category of the SOFTWARE, not of the component. Use \"other\" only when nothing fits.',\n  'confidence is 0..1: how sure you are about the software grouping AND category. reason: max 12 words.',\n  'Return exactly one result per input package_key, in the input order.',\n  '',\n  'Categories (code: name — description):',\n  ...categories.map(c => `- ${c.code}: ${c.name_uk} — ${c.description}`),\n].join('\\n');\n\nconst catalog = software\n  .map(s => ({ software_key: s.software_key, name: s.name, vendor: s.vendor, category_code: s.category_code }))\n  .sort((a, b) => a.software_key.localeCompare(b.software_key));\n\nconst resultProps = {\n  package_key: { type: 'string' },\n  existing_software_key: { type: 'string' },\n  software_name: { type: 'string' },\n  vendor: { type: 'string' },\n  category_code: { type: 'string', enum: categoryCodes },\n  confidence: { type: 'number' },\n  reason: { type: 'string' },\n};\nconst item = { type: 'object', additionalProperties: false, required: Object.keys(resultProps), properties: resultProps };\nconst schema = { type: 'object', additionalProperties: false, required: ['results'],\n  properties: { results: { type: 'array', items: item } } };\n\nconst batches = [];\nfor (let i = 0; i < unknown.length; i += BATCH_SIZE) {\n  const chunk = unknown.slice(i, i + BATCH_SIZE);\n  const payload = chunk.map(r => ({ package_key: r.package_key, name: r.name, package_id: r.package_id,\n    source_type: r.source_type, version: r.version }));\n  batches.push({\n    skip: false,\n    keys: chunk.map(r => r.package_key),\n    request: {\n      model: MODEL,\n      max_tokens: 32000,\n      fallbacks: 'default',\n      output_config: { effort: 'low', format: { type: 'json_schema', schema } },\n      system,\n      messages: [{ role: 'user', content:\n        'Existing software catalog:\\n' + JSON.stringify(catalog) +\n        '\\n\\nPackages to classify:\\n' + JSON.stringify(payload) }],\n    },\n  });\n}\n\n// ctx rides on the first item only — Finalize reads it from there\nconst items = batches.length ? batches : [{ skip: true }];\nitems[0].ctx = { run_id: parsed.run_id, now: parsed.now, matched, unknown, categories, catalog };\nreturn items.map(json => ({ json }));\n"
+      },
+      "id": "match",
+      "name": "Match",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "skip-check",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "need-ai",
+      "name": "Need AI?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1328,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "server-side-fallback-2026-07-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 600000
+        }
+      },
+      "id": "claude",
+      "name": "Claude classify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "position": [
+        1552,
+        208
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "pO86MUkFX21SXudv",
+          "name": "Anthropic (software inventory)"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Finalize: validate AI answers, build software/package rows, detect removed packages, run stats.\nconst REVIEW_THRESHOLD = 0.7;\n\nconst matchItems = $('Match').all().map(i => i.json);\nconst ctx = matchItems[0].ctx;\nconst packages = $('Load packages').all().map(i => i.json).filter(r => r.package_key);\n\nconst categoryCodes = new Set(ctx.categories.map(c => c.code));\nconst softwareKeys = new Set(ctx.catalog.map(s => s.software_key));\nconst packageByKey = Object.fromEntries(packages.map(p => [p.package_key, p]));\n\nfunction slug(s) {\n  return String(s).normalize('NFKD').replace(/\\p{M}+/gu, '').toLowerCase()\n    .replace(/\\+\\+/g, 'pp').replace(/[^a-z0-9а-яіїєґ]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown';\n}\nfunction clamp01(x) { const n = Number(x); return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0; }\n\n// --- collect AI results by package_key\nconst aiResults = {};\nconst batchErrors = [];\nconst responses = matchItems[0].skip ? [] : $input.all().map(i => i.json);\nresponses.forEach((resp, i) => {\n  const keys = new Set(matchItems[i]?.keys || []);\n  try {\n    if (resp.error) throw new Error(typeof resp.error === 'string' ? resp.error\n      : [resp.error.message, resp.error.description].filter(Boolean).join(': ').slice(0, 300));\n    if (resp.stop_reason !== 'end_turn') throw new Error('stop_reason=' + resp.stop_reason);\n    const textBlock = (resp.content || []).find(b => b.type === 'text');\n    const parsed = JSON.parse(textBlock.text);\n    for (const r of parsed.results || []) if (keys.has(r.package_key) && !aiResults[r.package_key]) aiResults[r.package_key] = r;\n  } catch (e) {\n    batchErrors.push(`batch ${i}: ${e.message}`);\n  }\n});\n\n// --- resolve software for unknown packages\nconst newSoftware = {};\nconst resolved = ctx.unknown.map(row => {\n  const r = aiResults[row.package_key];\n  // no software is created: the package goes back to the AI queue on the next run\n  if (!r) return { ...row, software_key: '', match_method: 'fallback', confidence: 0,\n    reason: 'AI не повернув результат', needs_review: true };\n\n  const confidence = clamp01(r.confidence);\n  const validCategory = categoryCodes.has(r.category_code);\n  const key = softwareKeys.has(r.existing_software_key) ? r.existing_software_key : slug(r.software_name);\n  // ponytail: first answer wins for a new software key; later duplicates keep their own confidence on the package row\n  if (!softwareKeys.has(key) && !newSoftware[key]) {\n    newSoftware[key] = { software_key: key, name: r.software_name, vendor: r.vendor || '',\n      category_code: validCategory ? r.category_code : 'other', aliases: '', source: 'ai',\n      confidence, locked: false, needs_review: confidence < REVIEW_THRESHOLD || !validCategory };\n  }\n  return { ...row, software_key: key, match_method: 'ai', confidence,\n    reason: String(r.reason || '').slice(0, 200), needs_review: confidence < REVIEW_THRESHOLD };\n});\n\n// --- package rows: only what this file contains; rows from other machines are left untouched\n// ponytail: the catalog holds no per-machine state, so `version` is the one last seen.\n// Add a `host` column and key rows by host + package_key if you need \"installed where\".\nlet newPackages = 0, updatedPackages = 0;\nconst packageRows = [...ctx.matched, ...resolved].map(row => {\n  const prev = packageByKey[row.package_key];\n  if (!prev) newPackages++;\n  else if (prev.version !== row.version || (prev.available_version || '') !== row.available_version\n    || !prev.is_installed || prev.software_key !== row.software_key) updatedPackages++;\n  return { ...row, is_installed: true,\n    first_seen: prev?.first_seen || ctx.now, last_seen: ctx.now, last_run_id: ctx.run_id };\n});\n\nconst softwareRows = Object.values(newSoftware).sort((a, b) => a.software_key.localeCompare(b.software_key));\nconst run = {\n  run_id: ctx.run_id, started_at: ctx.now, total: packageRows.length,\n  new_packages: newPackages, updated_packages: updatedPackages,\n  removed_packages: packages.length - packageRows.filter(r => packageByKey[r.package_key]).length,\n  new_software: softwareRows.length, ai_calls: responses.length,\n  needs_review: packageRows.filter(r => r.is_installed && r.needs_review).length,\n};\n\n// --- readable breakdown: category -> software -> its packages\nconst allSoftware = Object.fromEntries([...ctx.catalog, ...Object.values(newSoftware)].map(s => [s.software_key, s]));\nconst catName = Object.fromEntries(ctx.categories.map(c => [c.code, c.name_uk]));\nconst grouped = {};\nfor (const r of packageRows.filter(r => r.is_installed)) {\n  const s = allSoftware[r.software_key];\n  const bucket = (grouped[s?.category_code || 'other'] ??= {});\n  const label = s ? s.name : '❓ ПЗ не визначено';\n  (bucket[label] ??= []).push(r.name.replace(/…$/, '') + (r.instances > 1 ? ` ×${r.instances}` : ''));\n}\nconst report = Object.keys(grouped).sort((a, b) => (catName[a] || a).localeCompare(catName[b] || b)).map(code => {\n  const names = Object.keys(grouped[code]).sort((a, b) => a.localeCompare(b));\n  const packages = names.reduce((n, name) => n + grouped[code][name].length, 0);\n  return [`▐ ${catName[code] || code} — ПЗ: ${names.length}, пакетів: ${packages}`,\n    ...names.map(name => {\n      const list = grouped[code][name];\n      return list.length === 1 && list[0] === name ? `   ${name}` : `   ${name}: ${list.join(', ')}`;\n    })].join('\\n');\n}).join('\\n\\n');\n\nconst summary = [\n  `Запуск ${run.run_id}`,\n  `Пакетів у файлі: ${run.total}`,\n  `Нових пакетів: ${run.new_packages}; оновлених: ${run.updated_packages}`,\n  `У довіднику з інших файлів: ${run.removed_packages}`,\n  `Нового ПЗ: ${run.new_software}; викликів AI: ${run.ai_calls}`,\n  `На ручну перевірку: ${run.needs_review}`,\n  ...batchErrors.map(e => `Помилка AI — ${e}`),\n  '',\n  report,\n].join('\\n');\n\nreturn [{ json: { run, summary, report, batch_errors: batchErrors, softwareRows, packageRows } }];\n"
+      },
+      "id": "finalize",
+      "name": "Finalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.first().json.softwareRows.map(json => ({ json }));"
+      },
+      "id": "sw-rows",
+      "name": "Software rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "sw_software"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "software_key",
+              "keyValue": "={{ $json.software_key }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "sw-upsert",
+      "name": "Upsert software",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2208,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.first().json.packageRows.map(json => ({ json }));"
+      },
+      "id": "pkg-rows",
+      "name": "Package rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "sw_packages"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "package_key",
+              "keyValue": "={{ $json.package_key }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "pkg-upsert",
+      "name": "Upsert packages",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2208,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $input.first().json.run }];"
+      },
+      "id": "run-row",
+      "name": "Run row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "sw_runs"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "started_at",
+              "displayName": "started_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "total",
+              "displayName": "total",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "new_packages",
+              "displayName": "new_packages",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "updated_packages",
+              "displayName": "updated_packages",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "removed_packages",
+              "displayName": "removed_packages",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "new_software",
+              "displayName": "new_software",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "ai_calls",
+              "displayName": "ai_calls",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "needs_review",
+              "displayName": "needs_review",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "run-insert",
+      "name": "Log run",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2208,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Готово",
+        "completionMessage": "={{ $('Finalize').first().json.summary }}",
+        "options": {}
+      },
+      "id": "done",
+      "name": "Result",
+      "webhookId": "a9b30f9b-8e32-4a6a-a804-b246903fab36",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        2432,
+        512
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Form": {
+      "main": [
+        [
+          {
+            "node": "Parse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse": {
+      "main": [
+        [
+          {
+            "node": "Load categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load categories": {
+      "main": [
+        [
+          {
+            "node": "Load software",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load software": {
+      "main": [
+        [
+          {
+            "node": "Load packages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load packages": {
+      "main": [
+        [
+          {
+            "node": "Match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match": {
+      "main": [
+        [
+          {
+            "node": "Need AI?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Need AI?": {
+      "main": [
+        [
+          {
+            "node": "Claude classify",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude classify": {
+      "main": [
+        [
+          {
+            "node": "Finalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize": {
+      "main": [
+        [
+          {
+            "node": "Software rows",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Package rows",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Run row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Software rows": {
+      "main": [
+        [
+          {
+            "node": "Upsert software",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Package rows": {
+      "main": [
+        [
+          {
+            "node": "Upsert packages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run row": {
+      "main": [
+        [
+          {
+            "node": "Log run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log run": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "cc7d3150-2ea3-4924-9ce6-65fc108cb30b",
+  "meta": {
+    "instanceId": "29a83de635ebe2331925411677c4db3d8ec2a44804fbe35b38ae42fe57949bec"
+  },
+  "nodeGroups": [],
+  "id": "3UtJJBq9i67PJD7R",
+  "tags": []
+}

@@ -1,0 +1,475 @@
+{
+  "name": "Software inventory — setup (run once)",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Software inventory setup",
+        "formDescription": "Creates 4 data tables (sw_categories, sw_software, sw_packages, sw_runs) and fills them with the category list and the built-in matching rules. Safe to run again: existing data is kept.",
+        "formFields": {
+          "values": [
+            {
+              "fieldType": "hiddenField",
+              "fieldName": "confirm",
+              "fieldValue": "go"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "start",
+      "name": "Start setup",
+      "webhookId": "c1d2e3f4-a5b6-47c8-99da-0b1c2d3e4f50",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "sw_categories",
+        "columns": {
+          "column": [
+            {
+              "name": "code"
+            },
+            {
+              "name": "name_uk"
+            },
+            {
+              "name": "description"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "t-cat",
+      "name": "Table sw_categories",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        224,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "sw_software",
+        "columns": {
+          "column": [
+            {
+              "name": "software_key"
+            },
+            {
+              "name": "name"
+            },
+            {
+              "name": "vendor"
+            },
+            {
+              "name": "category_code"
+            },
+            {
+              "name": "aliases"
+            },
+            {
+              "name": "source"
+            },
+            {
+              "name": "confidence",
+              "type": "number"
+            },
+            {
+              "name": "locked",
+              "type": "boolean"
+            },
+            {
+              "name": "needs_review",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "t-sw",
+      "name": "Table sw_software",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        448,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "sw_packages",
+        "columns": {
+          "column": [
+            {
+              "name": "package_key"
+            },
+            {
+              "name": "package_id"
+            },
+            {
+              "name": "name"
+            },
+            {
+              "name": "version"
+            },
+            {
+              "name": "available_version"
+            },
+            {
+              "name": "source_type"
+            },
+            {
+              "name": "arch"
+            },
+            {
+              "name": "truncated",
+              "type": "boolean"
+            },
+            {
+              "name": "instances",
+              "type": "number"
+            },
+            {
+              "name": "software_key"
+            },
+            {
+              "name": "match_method"
+            },
+            {
+              "name": "confidence",
+              "type": "number"
+            },
+            {
+              "name": "reason"
+            },
+            {
+              "name": "is_installed",
+              "type": "boolean"
+            },
+            {
+              "name": "needs_review",
+              "type": "boolean"
+            },
+            {
+              "name": "first_seen"
+            },
+            {
+              "name": "last_seen"
+            },
+            {
+              "name": "last_run_id"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "t-pkg",
+      "name": "Table sw_packages",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "sw_runs",
+        "columns": {
+          "column": [
+            {
+              "name": "run_id"
+            },
+            {
+              "name": "started_at"
+            },
+            {
+              "name": "total",
+              "type": "number"
+            },
+            {
+              "name": "new_packages",
+              "type": "number"
+            },
+            {
+              "name": "updated_packages",
+              "type": "number"
+            },
+            {
+              "name": "removed_packages",
+              "type": "number"
+            },
+            {
+              "name": "new_software",
+              "type": "number"
+            },
+            {
+              "name": "ai_calls",
+              "type": "number"
+            },
+            {
+              "name": "needs_review",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "t-run",
+      "name": "Table sw_runs",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Closed category list. name_uk is what the run report prints.\nreturn [\n  ['browsers', 'Браузери', 'Веб-браузери та їх служби оновлення'],\n  ['development', 'Розробка', 'IDE, редактори коду, мови програмування, SDK, VCS, термінали'],\n  ['databases', 'Бази даних', 'СУБД, драйвери та клієнти БД'],\n  ['games', 'Ігри', 'Окремі ігри'],\n  ['game_platforms', 'Ігрові платформи', 'Лаунчери і магазини ігор, ігрові оверлеї, Xbox-сервіси'],\n  ['multimedia', 'Мультимедіа', 'Відео, аудіо, фото, запис і стрімінг, медіаплеєри'],\n  ['office', 'Офіс і продуктивність', 'Офісні пакети, нотатки, задачі, AI-асистенти, автоматизація'],\n  ['communication', 'Комунікації', \"Месенджери, відеозв'язок, пошта\"],\n  ['network_vpn', 'Мережа / VPN', 'VPN, торент-клієнти, мережеві утиліти, віддалений доступ'],\n  ['drivers_hardware', 'Драйвери та утиліти заліза', 'Драйвери, панелі керування GPU/периферії, моніторинг і розгін'],\n  ['system_runtime', 'Системні компоненти / runtime', 'Runtime-бібліотеки, фреймворки, системні компоненти ОС, пакетні менеджери'],\n  ['codecs_extensions', 'Кодеки й розширення', 'Кодеки відео/зображень, мовні пакети, розширення ОС'],\n  ['utilities', 'Утиліти', 'Архіватори, скриншоти, калькулятор, блокнот та інші прості інструменти'],\n  ['security', 'Безпека', 'Антивіруси, захист системи, менеджери паролів'],\n  ['cloud_sync', 'Хмара / синхронізація', 'Хмарні сховища, синхронізація з телефоном і пристроями'],\n  ['other', 'Інше', 'Не вдалося однозначно визначити категорію'],\n].map(([code, name_uk, description]) => ({ json: { code, name_uk, description } }));\n"
+      },
+      "id": "seed-cat",
+      "name": "Seed categories",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "sw_categories"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "code",
+              "keyValue": "={{ $json.code }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "up-cat",
+      "name": "Write categories",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1328,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// aliases: id:<package_id prefix> or name:<name prefix>, separated by |, lowercase\nreturn [\n  ['microsoft-visual-c-redistributable', 'Microsoft Visual C++ Redistributable', 'system_runtime',\n    'id:microsoft.vcredist|name:microsoft visual c++ 20|name:microsoft visual c++ v14'],\n  ['microsoft-vclibs', 'Microsoft Visual C++ UWP Runtime (VCLibs)', 'system_runtime',\n    'id:microsoft.vclibs|name:microsoft visual c++ 2015 uwp'],\n  ['windows-app-sdk-runtime', 'Windows App SDK Runtime', 'system_runtime',\n    'id:microsoft.windowsappruntime|id:msix\\\\microsoftcorporationii.winappruntime|name:windowsappruntime|name:winappruntime'],\n  ['microsoft-ui-xaml', 'Microsoft UI XAML', 'system_runtime', 'id:microsoft.ui.xaml|name:microsoft.ui.xaml'],\n  ['microsoft-net-native', 'Microsoft .NET Native', 'system_runtime',\n    'id:microsoft.dotnet.native|id:msix\\\\microsoft.net.native|name:microsoft .net native'],\n  ['microsoft-net-desktop-runtime', 'Microsoft .NET Desktop Runtime', 'system_runtime',\n    'id:microsoft.dotnet.desktopruntime|name:microsoft windows desktop runtime'],\n].map(([software_key, name, category_code, aliases]) => ({ json: {\n  software_key, name, vendor: 'Microsoft', category_code, aliases,\n  source: 'manual', confidence: 1, locked: true, needs_review: false,\n} }));\n"
+      },
+      "id": "seed-sw",
+      "name": "Seed matching rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "sw_software"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "software_key",
+              "keyValue": "={{ $json.software_key }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "up-sw",
+      "name": "Write matching rules",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Tables are ready",
+        "completionMessage": "4 tables created, 16 categories and 6 matching rules written. Now open the main workflow \"Software inventory → catalog (Claude)\", pick your Anthropic credential in the Claude classify node, and run its form.",
+        "options": {}
+      },
+      "id": "done",
+      "name": "Done",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1984,
+        304
+      ],
+      "webhookId": "9884d1a8-08c2-44e8-b175-b896358a8d33"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Start setup": {
+      "main": [
+        [
+          {
+            "node": "Table sw_categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Table sw_categories": {
+      "main": [
+        [
+          {
+            "node": "Table sw_software",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Table sw_software": {
+      "main": [
+        [
+          {
+            "node": "Table sw_packages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Table sw_packages": {
+      "main": [
+        [
+          {
+            "node": "Table sw_runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Table sw_runs": {
+      "main": [
+        [
+          {
+            "node": "Seed categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seed categories": {
+      "main": [
+        [
+          {
+            "node": "Write categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write categories": {
+      "main": [
+        [
+          {
+            "node": "Seed matching rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seed matching rules": {
+      "main": [
+        [
+          {
+            "node": "Write matching rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write matching rules": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "dc93cc51-f4e6-4796-b01d-760910c92979",
+  "meta": {
+    "instanceId": "29a83de635ebe2331925411677c4db3d8ec2a44804fbe35b38ae42fe57949bec"
+  },
+  "nodeGroups": [],
+  "id": "GfBYgqOpU52b3RSp",
+  "tags": []
+}
